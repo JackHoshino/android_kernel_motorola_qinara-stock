@@ -39,9 +39,6 @@
 #ifdef CONFIG_TOUCHSCREEN_MELFAS100_TS
 #include <linux/melfas100_ts.h>
 #endif
-#ifdef CONFIG_TOUCHSCREEN_ATMXT
-#include <linux/input/atmxt.h>
-#endif
 
 #include <linux/dma-mapping.h>
 #include <linux/platform_data/qcom_crypto_device.h>
@@ -622,14 +619,12 @@ static void configure_gsbi_ctrl(int restore)
 	uint32_t new;
 	static uint32_t value;
 	static bool stored;
-	unsigned gsbi_phys;
+	unsigned gsbi_phys = MSM_GSBI12_PHYS;
 
-	if (!uart_over_gsbi12) {
+	if (!uart_over_gsbi12)
 		gsbi_phys = MSM_GSBI4_PHYS;
-		if (iface_clock)
-			clk_enable(iface_clock);
-	} else
-		gsbi_phys = MSM_GSBI12_PHYS;
+	if (iface_clock)
+		clk_enable(iface_clock);
 
 	gsbi_ctrl = ioremap_nocache(gsbi_phys, 4);
 	if (IS_ERR_OR_NULL(gsbi_ctrl)) {
@@ -839,12 +834,10 @@ static __init void mot_init_emu_detection(
 		ctrl_data->pmic_id_irq = 0;
 		ctrl_data->accy_pdev = &emu_det_device;
 
-		if (!uart_over_gsbi12) {
-			iface_clock = clk_get_sys(MSM_I2C_NAME ".4",
-							"iface_clk");
-			if (IS_ERR(iface_clock))
-				pr_err("error getting GSBI4 clk\n");
-		}
+		iface_clock = clk_get_sys(uart_over_gsbi12 ?
+			MSM_I2C_NAME ".12" : MSM_I2C_NAME ".4", "iface_clk");
+		if (IS_ERR(iface_clock))
+			pr_err("error getting GSBI iface clk\n");
 
 		emu_det_gpio_init();
 		mot_setup_whisper_uart();
@@ -856,6 +849,49 @@ static __init void mot_init_emu_detection(
 		emu_mux_ctrl_config_pin(EMU_MUX_CTRL0_GPIO, 1);
 		emu_mux_ctrl_config_pin(EMU_MUX_CTRL1_GPIO, 0);
 	}
+}
+
+static void __init config_ulpi_from_dt(void)
+{
+	struct device_node *chosen;
+	int len;
+	const void *prop;
+
+	chosen = of_find_node_by_path("/Chosen@0");
+	if (!chosen)
+		goto out;
+
+	/*
+	 * the phy init sequence read from the device tree should be a
+	 * sequence of value/register pairs
+	 */
+	prop = of_get_property(chosen, "ulpi_phy_init_seq", &len);
+	if (prop && !(len % 2)) {
+		int i;
+		u8* prop_val;
+
+		msm_otg_pdata.phy_init_seq = kzalloc(sizeof(int)*(len+1),
+							GFP_KERNEL);
+		if (!msm_otg_pdata.phy_init_seq) {
+			msm_otg_pdata.phy_init_seq = phy_settings;
+			goto put_node;
+		}
+
+		msm_otg_pdata.phy_init_seq[len] = -1;
+		prop_val = (u8 *)prop;
+
+		for (i = 0; i < len; i+=2) {
+			msm_otg_pdata.phy_init_seq[i] = prop_val[i];
+			msm_otg_pdata.phy_init_seq[i+1] = prop_val[i+1];
+		}
+	} else
+		msm_otg_pdata.phy_init_seq = phy_settings;
+
+put_node:
+	of_node_put(chosen);
+
+out:
+	return;
 }
 
 /* defaulting to qinara, atag parser will override */
@@ -1819,7 +1855,7 @@ static struct msm_camera_sensor_flash_data flash_ov7736 = {
 };
 
 static struct msm_camera_sensor_platform_info sensor_board_info_ov7736 = {
-	.mount_angle  = 90,
+	.mount_angle  = 270,
 	.sensor_reset = 76,
 	.sensor_pwd   = 89,
 	.analog_en    = 82,
@@ -3736,8 +3772,6 @@ core_initcall(msm8960_get_acputype);
 
 static void __init msm8960_mmi_init(void)
 {
-	msm_otg_pdata.phy_init_seq = phy_settings;
-
 	if (mbm_protocol_version == 0)
 		pr_err("ERROR: ATAG MBM_PROTOCOL_VERSION is not present."
 			" Bootloader update is required\n");
@@ -3768,6 +3802,9 @@ static void __init msm8960_mmi_init(void)
 
 	/* needs to happen before msm_clock_init */
 	config_camera_single_mclk_from_dt();
+
+	/* check for device specific ulpi phy init sequence */
+	config_ulpi_from_dt();
 
 	pmic_reset_irq = PM8921_IRQ_BASE + PM8921_RESOUT_IRQ;
 	regulator_suppress_info_printing();

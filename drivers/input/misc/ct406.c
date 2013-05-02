@@ -34,7 +34,7 @@
 #include <linux/uaccess.h>
 #include <linux/workqueue.h>
 
-#define CT406_I2C_RETRIES	5
+#define CT406_I2C_RETRIES	2
 #define CT406_I2C_RETRY_DELAY	10
 
 #define CT406_COMMAND_SELECT		0x80
@@ -120,6 +120,8 @@
 #define CT406_ALS_LOW_TO_HIGH_THRESHOLD	200	/* 200 lux */
 #define CT406_ALS_HIGH_TO_LOW_THRESHOLD	100	/* 100 lux */
 
+#define CT406_ALS_IRQ_DELTA_PERCENT	5
+
 #define CT40X_REV_ID_CT405		0x02
 #define CT40X_REV_ID_CT406a		0x03
 #define CT40X_REV_ID_CT406b		0x04
@@ -161,6 +163,7 @@ struct ct406_data {
 	unsigned int als_requested;
 	unsigned int als_enabled;
 	unsigned int als_apers;
+	unsigned int als_first_report;
 	enum ct406_als_mode als_mode;
 	unsigned int wait_enabled;
 	/* numeric values */
@@ -168,6 +171,7 @@ struct ct406_data {
 	unsigned int prox_low_threshold;
 	unsigned int prox_high_threshold;
 	unsigned int als_low_threshold;
+	unsigned int als_high_threshold;
 	u16 prox_saturation_threshold;
 	u16 prox_covered_offset;
 	u16 prox_uncovered_offset;
@@ -419,7 +423,7 @@ static void ct406_write_als_thresholds(struct ct406_data *ct)
 {
 	u8 reg_data[5] = {0};
 	unsigned int ailt = ct->als_low_threshold;
-	unsigned int aiht = CT406_C0DATA_MAX;
+	unsigned int aiht = ct->als_high_threshold;
 	int error;
 
 	reg_data[0] = (CT406_AILTL | CT406_COMMAND_AUTO_INCREMENT);
@@ -473,6 +477,7 @@ static void ct406_als_mode_sunlight(struct ct406_data *ct)
 
 	ct->als_mode = CT406_ALS_MODE_SUNLIGHT;
 	ct->als_low_threshold = ct->prox_saturation_threshold;
+	ct->als_high_threshold = CT406_C0DATA_MAX;
 	ct406_write_als_thresholds(ct);
 }
 
@@ -515,6 +520,7 @@ static void ct406_als_mode_low_lux(struct ct406_data *ct)
 
 	ct->als_mode = CT406_ALS_MODE_LOW_LUX;
 	ct->als_low_threshold = CT406_C0DATA_MAX - 1;
+	ct->als_high_threshold = CT406_C0DATA_MAX;
 	ct406_write_als_thresholds(ct);
 }
 
@@ -557,6 +563,7 @@ static void ct406_als_mode_high_lux(struct ct406_data *ct)
 
 	ct->als_mode = CT406_ALS_MODE_HIGH_LUX;
 	ct->als_low_threshold = CT406_C0DATA_MAX - 1;
+	ct->als_high_threshold = CT406_C0DATA_MAX;
 	ct406_write_als_thresholds(ct);
 }
 
@@ -735,12 +742,13 @@ static int ct406_enable_als(struct ct406_data *ct)
 
 		/* write ALS interrupt persistence */
 		reg_data[0] = CT406_PERS;
-		reg_data[1] = CT406_PERS_PPERS | ct->als_apers;
+		reg_data[1] = CT406_PERS_PPERS;
 		error = ct406_i2c_write(ct, reg_data, 1);
 		if (error < 0) {
 			pr_err("%s: Error  %d\n", __func__, error);
 			return error;
 		}
+		ct->als_first_report = 0;
 
 		ct406_clear_als_flag(ct);
 
@@ -1020,6 +1028,7 @@ static void ct406_report_als(struct ct406_data *ct)
 	unsigned int c1data;
 	unsigned int ratio;
 	unsigned int lux = 0;
+	unsigned int threshold_delta;
 
 	reg_data[0] = (CT406_C0DATA | CT406_COMMAND_AUTO_INCREMENT);
 	error = ct406_i2c_read(ct, reg_data, 4);
@@ -1031,6 +1040,18 @@ static void ct406_report_als(struct ct406_data *ct)
 	if (ct406_debug & CT406_DBG_INPUT)
 		pr_info("%s: C0DATA = %d, C1DATA = %d\n",
 			 __func__, c0data, c1data);
+
+	threshold_delta = c0data * CT406_ALS_IRQ_DELTA_PERCENT / 100;
+	if (threshold_delta == 0)
+		threshold_delta = 1;
+	if (c0data > threshold_delta)
+		ct->als_low_threshold = c0data - threshold_delta;
+	else
+		ct->als_low_threshold = 0;
+	ct->als_high_threshold = c0data + threshold_delta;
+	if (ct->als_high_threshold > CT406_C0DATA_MAX)
+		ct->als_high_threshold = CT406_C0DATA_MAX;
+	ct406_write_als_thresholds(ct);
 
 	/* calculate lux using piecewise function from TAOS */
 	if (c0data == 0)
@@ -1076,6 +1097,17 @@ static void ct406_report_als(struct ct406_data *ct)
 
 	input_event(ct->dev, EV_LED, LED_MISC, lux);
 	input_sync(ct->dev);
+
+	if (ct->als_first_report == 0) {
+		/* write ALS interrupt persistence */
+		reg_data[0] = CT406_PERS;
+		reg_data[1] = CT406_PERS_PPERS | ct->als_apers;
+		error = ct406_i2c_write(ct, reg_data, 1);
+		if (error < 0) {
+			pr_err("%s: Error  %d\n", __func__, error);
+		}
+		ct->als_first_report = 1;
+	}
 
 	if (ct->als_mode != CT406_ALS_MODE_SUNLIGHT)
 		ct406_check_als_range(ct, lux);
@@ -1513,6 +1545,7 @@ static int ct406_probe(struct i2c_client *client,
 	ct->als_requested = 0;
 	ct->als_enabled = 0;
 	ct->als_apers = 0x4;
+	ct->als_first_report = 0;
 	ct->als_mode = CT406_ALS_MODE_LOW_LUX;
 
 	ct->workqueue = create_singlethread_workqueue("als_wq");

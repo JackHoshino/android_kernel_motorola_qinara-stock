@@ -31,6 +31,7 @@
 #include <linux/pm_runtime.h>
 #include <linux/kernel.h>
 #include <linux/gpio.h>
+#include <linux/emu-accy.h>
 #include "wcd9310.h"
 
 #define WCD9310_RATES (SNDRV_PCM_RATE_8000|SNDRV_PCM_RATE_16000|\
@@ -91,6 +92,7 @@ enum {
 static const DECLARE_TLV_DB_SCALE(digital_gain, 0, 1, 0);
 static const DECLARE_TLV_DB_SCALE(line_gain, 0, 7, 1);
 static const DECLARE_TLV_DB_SCALE(analog_gain, 0, 25, 1);
+static int emu_analog_antipop;
 
 enum tabla_bandgap_type {
 	TABLA_BANDGAP_OFF = 0,
@@ -451,6 +453,17 @@ static int tabla_get_iir_band_audio_mixer(
 	return 0;
 }
 
+int tabla_mot_get_emu_audio_state(void)
+{
+	/* yes this is a bit of a hack.  This information should reside in the
+	   card private data so it's accessible by all soc components, but QC
+	   isn't using that mechanism yet and I don't want to add it just for
+	   this one flag
+	*/
+	return emu_analog_antipop;
+}
+
+
 static void set_iir_band_coeff(struct snd_soc_codec *codec,
 				int iir_idx, int band_idx,
 				int coeff_idx, uint32_t value)
@@ -516,6 +529,38 @@ static int tabla_put_iir_band_audio_mixer(
 		get_iir_band_coeff(codec, iir_idx, band_idx, 3),
 		__func__, iir_idx, band_idx,
 		get_iir_band_coeff(codec, iir_idx, band_idx, 4));
+	return 0;
+}
+
+static int snd_soc_get_emu_antipop(struct snd_kcontrol *kcontrol,
+			struct snd_ctl_elem_value *ucontrol)
+{
+	ucontrol->value.integer.value[0] = emu_analog_antipop;
+	return 0;
+}
+
+static int snd_soc_put_emu_antipop(struct snd_kcontrol *kcontrol,
+			struct snd_ctl_elem_value *ucontrol)
+{
+	unsigned short val = ucontrol->value.integer.value[0];
+
+	pr_debug("%s: old value %u; new value %u\n", __func__,
+			emu_analog_antipop, val);
+
+	if (val > 1)
+		return -EINVAL;
+	else if (val == emu_analog_antipop)
+		return 0;
+	emu_analog_antipop = val;
+
+	if (val == 1) {
+		set_mux_ctrl_mode_for_audio(MUXMODE_AUDIO);
+		pr_debug("%s SET EMU TO MUXMODE_AUDIO\n", __func__);
+	} else {
+		set_mux_ctrl_mode_for_audio(MUXMODE_USB);
+		pr_debug("%s SET EMU TO MUXMODE_USB\n", __func__);
+	}
+
 	return 0;
 }
 
@@ -734,6 +779,9 @@ static const struct snd_kcontrol_new tabla_snd_controls[] = {
 	tabla_get_iir_band_audio_mixer, tabla_put_iir_band_audio_mixer),
 	SOC_SINGLE_MULTI_EXT("IIR2 Band5", IIR2, BAND5, 255, 0, 5,
 	tabla_get_iir_band_audio_mixer, tabla_put_iir_band_audio_mixer),
+
+	SOC_SINGLE_BOOL_EXT("EMU Antipop", 0, snd_soc_get_emu_antipop,
+	snd_soc_put_emu_antipop),
 };
 
 static const struct snd_kcontrol_new tabla_1_x_snd_controls[] = {
@@ -4296,8 +4344,11 @@ static irqreturn_t tabla_dce_handler(int irq, void *data)
 		mask = tabla_get_button_mask(btn);
 		priv->buttons_pressed |= mask;
 		tabla_lock_sleep(core);
+		/* Shorten delay from 400ms to 10ms for comparability with */
+		/* Motorola's extention for the HS key events like */
+		/* 2 short HS key press = KEY_MEDIA_NEXT */
 		if (schedule_delayed_work(&priv->mbhc_btn_dwork,
-					  msecs_to_jiffies(400)) == 0) {
+					  msecs_to_jiffies(10)) == 0) {
 			WARN(1, "Button pressed twice without release"
 			     "event\n");
 			tabla_unlock_sleep(core);
@@ -6248,6 +6299,7 @@ static int __init tabla_codec_init(void)
 		rtn = platform_driver_register(&tabla1x_codec_driver);
 		if (rtn != 0)
 			platform_driver_unregister(&tabla_codec_driver);
+		emu_analog_antipop = 0;
 	}
 	return rtn;
 }

@@ -244,7 +244,7 @@ static int32_t dw9714_set_params(struct msm_actuator_ctrl_t *a_ctrl)
 	msm_camera_i2c_write(&a_ctrl->i2c_client,
 		0xA1, 0x04, MSM_CAMERA_I2C_BYTE_DATA);
 	msm_camera_i2c_write(&a_ctrl->i2c_client,
-		0xF2, 0x38, MSM_CAMERA_I2C_BYTE_DATA);
+		0xF2, 0x00, MSM_CAMERA_I2C_BYTE_DATA);
 	msm_camera_i2c_write(&a_ctrl->i2c_client,
 		0xDC, 0x51, MSM_CAMERA_I2C_BYTE_DATA);
 	return 0;

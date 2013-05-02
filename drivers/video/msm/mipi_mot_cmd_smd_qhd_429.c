@@ -26,7 +26,7 @@ static struct mipi_mot_panel *mot_panel;
 
 /* DSI timing calculated for qhd 4.3 based on QCOM table */
 static struct mipi_dsi_phy_ctrl dsi_cmd_mode_phy_db = {
-	{0x03, 0x0a, 0x04, 0x00, 0x20},/* regulator */
+	{0x09, 0x08, 0x05, 0x00, 0x20},/* regulator */
 	/* timing   */
 	{0xb4, 0x2b, 0x1d, 0x00, 0x96, 0x94, 0x21,
 	0x2d, 0x21, 0x03, 0x04, 0xa0},
@@ -730,6 +730,11 @@ static int panel_enable(struct msm_fb_data_type *mfd)
 	/* elvss */
 	for (i = 1; i < 5; i++)
 		elvss_output_set[i] = elvss_value;
+	if (mot_panel->elvss_tth_support_present &&
+		mot_panel->elvss_tth_status)
+		for (i = 1; i < 5; i++)
+			elvss_output_set[i] = elvss_value + 0xF;
+
 	mipi_dsi_cmds_tx(mfd, dsi_tx_buf, elvss_set_cmd,
 		ARRAY_SIZE(elvss_set_cmd));
 
@@ -901,6 +906,8 @@ static int __init mipi_cmd_mot_smd_qhd_429_init(void)
 
 	mot_panel->acl_support_present = TRUE;
 	mot_panel->acl_enabled = FALSE; /* By default the ACL is disbled. */
+
+	mot_panel->elvss_tth_support_present = TRUE;
 
 	mot_panel->panel_enable = panel_enable;
 	mot_panel->panel_disable = panel_disable;

@@ -45,7 +45,7 @@ static struct dsi_buf dsi_tx_buf;
 static int dsi_irq_enabled;
 static spinlock_t dsi_irq_lock;
 static spinlock_t dsi_mdp_lock;
-static spinlock_t dsi_clk_lock;
+spinlock_t dsi_clk_lock;
 static int dsi_mdp_busy;
 
 static struct list_head pre_kickoff_list;
@@ -146,38 +146,16 @@ void mipi_dsi_disable_irq(void)
 	spin_unlock(&dsi_irq_lock);
 }
 
-int mipi_dsi_turn_on_clks(void)
+void mipi_dsi_turn_on_clks(void)
 {
-	unsigned long flags;
-	int ret = 0;
-
-	spin_lock_irqsave(&dsi_clk_lock, flags);
-	if (mipi_dsi_clk_on) {
-		ret = 1;
-		goto end;
-	}
 	mipi_dsi_ahb_ctrl(1);
 	mipi_dsi_clk_enable();
-end:
-	spin_unlock_irqrestore(&dsi_clk_lock, flags);
-	return ret;
 }
 
-int  mipi_dsi_turn_off_clks(void)
+void mipi_dsi_turn_off_clks(void)
 {
-	unsigned long flags;
-	int ret = 0;
-
-	spin_lock_irqsave(&dsi_clk_lock, flags);
-	if (mipi_dsi_clk_on == 0) {
-		ret = 1;
-		goto end;
-	}
 	mipi_dsi_clk_disable();
 	mipi_dsi_ahb_ctrl(0);
-end:
-	spin_unlock_irqrestore(&dsi_clk_lock, flags);
-	return ret;
 }
 
 static void mipi_dsi_action(struct list_head *act_list)

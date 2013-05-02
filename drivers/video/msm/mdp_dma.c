@@ -301,7 +301,11 @@ void	mdp3_dsi_cmd_dma_busy_wait(struct msm_fb_data_type *mfd)
 
 	spin_lock_irqsave(&mdp_spin_lock, flag);
 #ifdef DSI_CLK_CTRL
-	mipi_dsi_turn_on_clks();
+
+	spin_lock_bh(&dsi_clk_lock);
+	if (mipi_dsi_clk_on == 0)
+		mipi_dsi_turn_on_clks();
+	spin_unlock_bh(&dsi_clk_lock);
 #endif
 
 	if (mfd->dma->busy == TRUE) {
@@ -517,14 +521,19 @@ void mdp_set_dma_pan_info(struct fb_info *info, struct mdp_dirty_region *dirty,
 			  boolean sync)
 {
 	struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)info->par;
+	struct fb_info *fbi = mfd->fbi;
 	MDPIBUF *iBuf;
 	int bpp = info->var.bits_per_pixel / 8;
 
 	down(&mfd->sem);
+
 	iBuf = &mfd->ibuf;
-	iBuf->buf = (uint8 *) info->fix.smem_start;
-	iBuf->buf += info->var.xoffset * bpp +
-			info->var.yoffset * info->fix.line_length;
+	if (mfd->map_buffer)
+		iBuf->buf = (uint8 *)mfd->map_buffer->iova[0];
+	else
+		iBuf->buf = (uint8 *) info->fix.smem_start;
+
+	iBuf->buf += calc_fb_offset(mfd, fbi, bpp);
 
 	iBuf->ibuf_width = info->var.xres_virtual;
 	iBuf->bpp = bpp;

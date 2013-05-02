@@ -68,8 +68,14 @@ int mdp4_overlay_dsi_state_get(void)
 
 static void dsi_clock_tout(unsigned long data)
 {
-	if (dsi_state == ST_DSI_PLAYING && !mipi_dsi_turn_off_clks())
+	spin_lock(&dsi_clk_lock);
+	if (mipi_dsi_clk_on) {
+		if (dsi_state == ST_DSI_PLAYING) {
+			mipi_dsi_turn_off_clks();
 			mdp4_overlay_dsi_state_set(ST_DSI_CLK_OFF);
+		}
+	}
+	spin_unlock(&dsi_clk_lock);
 }
 
 static __u32 msm_fb_line_length(__u32 fb_index, __u32 xres, int bpp)
@@ -85,6 +91,11 @@ static __u32 msm_fb_line_length(__u32 fb_index, __u32 xres, int bpp)
 		return ALIGN(xres, 32) * bpp;
 	else
 		return xres * bpp;
+}
+
+void mdp4_dsi_cmd_del_timer(void)
+{
+	del_timer_sync(&dsi_clock_timer);
 }
 
 void mdp4_mipi_vsync_enable(struct msm_fb_data_type *mfd,
@@ -568,7 +579,10 @@ void mdp4_dsi_cmd_dma_busy_wait(struct msm_fb_data_type *mfd)
 			__func__, current->pid, mipi_dsi_clk_on);
 
 	/* satrt dsi clock if necessary */
-	mipi_dsi_turn_on_clks();
+	spin_lock_bh(&dsi_clk_lock);
+	if (mipi_dsi_clk_on == 0)
+		mipi_dsi_turn_on_clks();
+	spin_unlock_bh(&dsi_clk_lock);
 
 	spin_lock_irqsave(&mdp_spin_lock, flag);
 	if (mfd->dma->busy == TRUE) {
@@ -665,8 +679,10 @@ void mdp4_dsi_cmd_overlay_kickoff(struct msm_fb_data_type *mfd,
 void mdp_dsi_cmd_overlay_suspend(void)
 {
 	/* dis-engage rgb0 from mixer0 */
-	if (dsi_pipe)
+	if (dsi_pipe) {
 		mdp4_mixer_stage_down(dsi_pipe);
+		mdp4_iommu_unmap(dsi_pipe);
+	}
 }
 
 void mdp4_dsi_cmd_overlay(struct msm_fb_data_type *mfd)
@@ -686,8 +702,9 @@ void mdp4_dsi_cmd_overlay(struct msm_fb_data_type *mfd)
 
 		mdp4_overlay_update_dsi_cmd(mfd);
 
+		mdp4_iommu_attach();
 		mdp4_dsi_cmd_kickoff_ui(mfd, dsi_pipe);
-
+		mdp4_iommu_unmap(dsi_pipe);
 	/* signal if pan function is waiting for the update completion */
 		if (mfd->pan_waiting) {
 			mfd->pan_waiting = FALSE;

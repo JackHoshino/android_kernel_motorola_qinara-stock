@@ -194,6 +194,12 @@ struct tag_cid_recover_boot {
 	uint32_t cid_recover_boot;
 };
 
+/* Bootloader build signature */
+#define ATAG_BL_BUILD_SIG 0xf1000418
+struct tag_bl_build_sig {
+	char bl_build_sig[1];
+};
+
 #endif /*  CONFIG_BOOTINFO */
 
 #define ATAG_EMMC_VERSION 0xf1000416
@@ -243,6 +249,7 @@ struct tag {
 		struct tag_mbm_version                 mbm_version;
 		struct tag_battery_status_at_boot      battery_status_at_boot;
 		struct tag_cid_recover_boot            cid_recover_boot;
+		struct tag_bl_build_sig                bl_build_sig;
 #endif /*  CONFIG_BOOTINFO */
 		struct tag_emmc_version emmc_version;
 	} u;
@@ -286,6 +293,20 @@ struct meminfo {
 };
 
 extern struct meminfo meminfo;
+
+#ifdef CONFIG_DONT_MAP_HOLE_IN_LOWMEM
+struct vmembank {
+	unsigned long start;
+	unsigned long delta;
+};
+
+struct vmeminfo {
+	int nr_banks;
+	struct vmembank vbank[NR_BANKS];
+};
+
+extern struct vmeminfo vmeminfo;
+#endif
 
 #define for_each_bank(iter,mi)				\
 	for (iter = 0; iter < (mi)->nr_banks; iter++)
