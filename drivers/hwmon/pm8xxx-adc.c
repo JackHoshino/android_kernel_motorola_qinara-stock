@@ -23,7 +23,6 @@
 #include <linux/hwmon.h>
 #include <linux/module.h>
 #include <linux/debugfs.h>
-#include <linux/wakelock.h>
 #include <linux/interrupt.h>
 #include <linux/completion.h>
 #include <linux/hwmon-sysfs.h>
@@ -121,10 +120,13 @@
 #define PM8XXX_ADC_PA_THERM_VREG_UV_MIN			1800000
 #define PM8XXX_ADC_PA_THERM_VREG_UV_MAX			1800000
 #define PM8XXX_ADC_PA_THERM_VREG_UA_LOAD		100000
+#define PM8XXX_ADC_BATT_THERM_VREG_UV_MIN		1800000
+#define PM8XXX_ADC_BATT_THERM_VREG_UV_MAX		1800000
+#define PM8XXX_ADC_BATT_THERM_VREG_UA_LOAD		100000
+#define PM8XXX_ADC_BATT_THERM_VREG_SETTLE		3
 #define PM8XXX_ADC_HWMON_NAME_LENGTH			32
 #define PM8XXX_ADC_BTM_INTERVAL_MAX			0x14
-
-#define PM8XXX_ADC_TIMEOUT                              (5 * HZ)
+#define PM8XXX_ADC_COMPLETION_TIMEOUT			(2 * HZ)
 
 struct pm8xxx_adc {
 	struct device				*dev;
@@ -143,8 +145,6 @@ struct pm8xxx_adc {
 	struct work_struct			cool_work;
 	uint32_t				mpp_base;
 	struct device				*hwmon;
-	struct wake_lock			adc_wakelock;
-	struct wake_lock			adc_read_wakelock;
 	int					msm_suspend_check;
 	struct pm8xxx_adc_amux_properties	*conv;
 	struct pm8xxx_adc_scale_tbl		*scale_tbls;
@@ -168,6 +168,7 @@ static const struct pm8xxx_adc_scaling_ratio pm8xxx_amux_scaling_ratio[] = {
 };
 
 static struct pm8xxx_adc *pmic_adc;
+static struct regulator *batt_therm;
 static struct regulator *pa_therm;
 
 static struct pm8xxx_adc_scale_fn adc_scale_fn[] = {
@@ -227,7 +228,6 @@ static int32_t pm8xxx_adc_arb_cntrl(uint32_t arb_cntrl,
 			pr_err("PM8xxx ADC request made after suspend_noirq "
 					"with channel: %d\n", channel);
 		data_arb_cntrl |= PM8XXX_ADC_ARB_USRP_CNTRL1_EN_ARB;
-		wake_lock(&adc_pmic->adc_wakelock);
 	}
 
 	/* Write twice to the CNTRL register for the arbiter settings
@@ -246,8 +246,7 @@ static int32_t pm8xxx_adc_arb_cntrl(uint32_t arb_cntrl,
 		INIT_COMPLETION(adc_pmic->adc_rslt_completion);
 		rc = pm8xxx_writeb(adc_pmic->dev->parent,
 			PM8XXX_ADC_ARB_USRP_CNTRL1, data_arb_cntrl);
-	} else
-		wake_unlock(&adc_pmic->adc_wakelock);
+	}
 
 	return 0;
 }
@@ -297,15 +296,65 @@ static int32_t pm8xxx_adc_patherm_power(bool on)
 	return rc;
 }
 
+static int32_t pm8xxx_adc_batt_therm_power(bool on)
+{
+	int rc = 0;
+
+	if (!batt_therm) {
+		pr_err("pm8xxx adc batt_therm not valid\n");
+		return -EINVAL;
+	}
+
+	if (on) {
+		rc = regulator_set_voltage(batt_therm,
+				PM8XXX_ADC_BATT_THERM_VREG_UV_MIN,
+				PM8XXX_ADC_BATT_THERM_VREG_UV_MAX);
+		if (rc < 0) {
+			pr_err("failed to set the voltage for "
+					"batt_therm with error %d\n", rc);
+			return rc;
+		}
+
+		rc = regulator_set_optimum_mode(batt_therm,
+				PM8XXX_ADC_BATT_THERM_VREG_UA_LOAD);
+		if (rc < 0) {
+			pr_err("failed to set optimum mode for "
+					"batt_therm with error %d\n", rc);
+			return rc;
+		}
+
+		rc = regulator_enable(batt_therm);
+		if (rc < 0) {
+			pr_err("failed to enable batt_therm vreg "
+					"with error %d\n", rc);
+			return rc;
+		}
+		mdelay(PM8XXX_ADC_BATT_THERM_VREG_SETTLE);
+	} else {
+		rc = regulator_disable(batt_therm);
+		if (rc < 0) {
+			pr_err("failed to disable batt_therm vreg "
+					"with error %d\n", rc);
+			return rc;
+		}
+	}
+
+	return rc;
+}
+
 static int32_t pm8xxx_adc_channel_power_enable(uint32_t channel,
 							bool power_cntrl)
 {
 	int rc = 0;
 
-	switch (channel)
+	switch (channel) {
+	case CHANNEL_BATT_THERM:
+		rc = pm8xxx_adc_batt_therm_power(power_cntrl);
+		break;
 	case ADC_MPP_1_AMUX8:
 		rc = pm8xxx_adc_patherm_power(power_cntrl);
-
+		break;
+	}
 	return rc;
 }
 
@@ -477,21 +526,14 @@ static void pm8xxx_adc_btm_cool_scheduler_fn(struct work_struct *work)
 	spin_unlock_irqrestore(&adc_pmic->btm_lock, flags);
 }
 
-void trigger_completion(struct work_struct *work)
-{
-	struct pm8xxx_adc *adc_8xxx = pmic_adc;
-
-	complete(&adc_8xxx->adc_rslt_completion);
-}
-DECLARE_WORK(trigger_completion_work, trigger_completion);
-
 static irqreturn_t pm8xxx_adc_isr(int irq, void *dev_id)
 {
+	struct pm8xxx_adc *adc_8xxx = pmic_adc;
 
 	if (pm8xxx_adc_calib_first_adc)
 		return IRQ_HANDLED;
 
-	schedule_work(&trigger_completion_work);
+	complete_all(&adc_8xxx->adc_rslt_completion);
 
 	return IRQ_HANDLED;
 }
@@ -691,7 +733,6 @@ uint32_t pm8xxx_adc_read(enum pm8xxx_adc_channels channel,
 	}
 
 	mutex_lock(&adc_pmic->adc_lock);
-	wake_lock(&adc_pmic->adc_read_wakelock);
 
 	for (i = 0; i < adc_pmic->adc_num_board_channel; i++) {
 		if (channel == adc_pmic->adc_channel[i].channel_name)
@@ -740,19 +781,21 @@ uint32_t pm8xxx_adc_read(enum pm8xxx_adc_channels channel,
 		goto fail;
 	}
 
-	if (!wait_for_completion_timeout(&adc_pmic->adc_rslt_completion,
-					PM8XXX_ADC_TIMEOUT)) {
-		pr_err("%s: ADC timeout rc=%d, channel=%d\n", __func__, rc, channel);
-		disable_irq(adc_pmic->adc_irq);
-		if (pm8xxx_adc_configure(adc_pmic->conv)) {
-			pr_err("%s: Reconfigure ADC failed\n", __func__);
+	rc = wait_for_completion_timeout(&adc_pmic->adc_rslt_completion,
+						PM8XXX_ADC_COMPLETION_TIMEOUT);
+	if (!rc) {
+		u8 data_arb_usrp_cntrl1 = 0;
+		rc = pm8xxx_adc_read_reg(PM8XXX_ADC_ARB_USRP_CNTRL1,
+					&data_arb_usrp_cntrl1);
+		if (rc < 0)
+			goto fail;
+		if (data_arb_usrp_cntrl1 == (PM8XXX_ADC_ARB_USRP_CNTRL1_EOC |
+					PM8XXX_ADC_ARB_USRP_CNTRL1_EN_ARB))
+			pr_debug("End of conversion status set\n");
+		else {
+			pr_err("EOC interrupt not received\n");
 			rc = -EINVAL;
 			goto fail;
-		}
-		if (!wait_for_completion_timeout(&adc_pmic->adc_rslt_completion,
-						 PM8XXX_ADC_TIMEOUT)) {
-			pr_err("%s: timeout again\n", __func__);
-			disable_irq(adc_pmic->adc_irq);
 		}
 	}
 
@@ -783,7 +826,6 @@ uint32_t pm8xxx_adc_read(enum pm8xxx_adc_channels channel,
 		goto fail_unlock;
 	}
 
-	wake_unlock(&adc_pmic->adc_read_wakelock);
 	mutex_unlock(&adc_pmic->adc_lock);
 
 	return 0;
@@ -792,7 +834,6 @@ fail:
 	if (rc_fail)
 		pr_err("pm8xxx adc power disable failed\n");
 fail_unlock:
-	wake_unlock(&adc_pmic->adc_read_wakelock);
 	mutex_unlock(&adc_pmic->adc_lock);
 	pr_err("pm8xxx adc error with %d\n", rc);
 	return rc;
@@ -1185,11 +1226,13 @@ static int __devexit pm8xxx_adc_teardown(struct platform_device *pdev)
 	struct pm8xxx_adc *adc_pmic = pmic_adc;
 	int i;
 
-	wake_lock_destroy(&adc_pmic->adc_wakelock);
-	wake_lock_destroy(&adc_pmic->adc_read_wakelock);
 	platform_set_drvdata(pdev, NULL);
 	pmic_adc = NULL;
-	if (!pa_therm) {
+	if (batt_therm) {
+		regulator_put(batt_therm);
+		batt_therm = NULL;
+	}
+	if (pa_therm) {
 		regulator_put(pa_therm);
 		pa_therm = NULL;
 	}
@@ -1289,10 +1332,6 @@ static int __devinit pm8xxx_adc_probe(struct platform_device *pdev)
 
 	disable_irq_nosync(adc_pmic->btm_cool_irq);
 	platform_set_drvdata(pdev, adc_pmic);
-	wake_lock_init(&adc_pmic->adc_wakelock, WAKE_LOCK_SUSPEND,
-					"pm8xxx_adc_wakelock");
-	wake_lock_init(&adc_pmic->adc_read_wakelock, WAKE_LOCK_SUSPEND,
-					"pm8xxx_adc_read_wakelock");
 	adc_pmic->msm_suspend_check = 0;
 	pmic_adc = adc_pmic;
 
@@ -1309,6 +1348,13 @@ static int __devinit pm8xxx_adc_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "failed to initialize pm8xxx hwmon adc\n");
 	}
 	adc_pmic->hwmon = hwmon_device_register(adc_pmic->dev);
+
+	batt_therm = regulator_get(adc_pmic->dev, "batt_therm");
+	if (IS_ERR(batt_therm)) {
+		rc = PTR_ERR(batt_therm);
+		pr_err("failed to request batt_therm vreg with error %d\n", rc);
+		batt_therm = NULL;
+	}
 
 	pa_therm = regulator_get(adc_pmic->dev, "pa_therm");
 	if (IS_ERR(pa_therm)) {

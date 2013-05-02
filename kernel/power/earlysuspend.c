@@ -79,11 +79,17 @@ void unregister_early_suspend(struct early_suspend *handler)
 }
 EXPORT_SYMBOL(unregister_early_suspend);
 
+extern int compact_nodes(void);
+
 static void early_suspend(struct work_struct *work)
 {
 	struct early_suspend *pos;
 	unsigned long irqflags;
 	int abort = 0;
+
+#ifdef CONFIG_COMPACTION
+	compact_nodes();
+#endif
 
 	mutex_lock(&early_suspend_lock);
 	spin_lock_irqsave(&state_lock, irqflags);

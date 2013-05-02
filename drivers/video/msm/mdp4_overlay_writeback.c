@@ -214,7 +214,7 @@ void mdp4_writeback_dma_busy_wait(struct msm_fb_data_type *mfd)
 				__func__, current->pid);
 		if (!wait_for_completion_timeout(&mfd->dma->comp, HZ)) {
 			pr_err("%s: wait timeout for dma->comp\n", __func__);
-			mdp_hang_panic();
+			mdp4_hang_panic();
 			spin_lock_irqsave(&mdp_spin_lock, flag);
 			busy_wait_cnt--;
 			mfd->dma->busy = false;
@@ -256,7 +256,7 @@ void mdp4_writeback_overlay_kickoff(struct msm_fb_data_type *mfd,
 	pr_debug("%s: before ov done interrupt\n", __func__);
 	if (!wait_for_completion_killable_timeout(&mfd->dma->comp, HZ)) {
 		pr_err("%s: wait timeout for dma->comp\n", __func__);
-		mdp_hang_panic();
+		mdp4_hang_panic();
 		spin_lock_irqsave(&mdp_spin_lock, flag);
 		mfd->dma->busy = FALSE;
 		spin_unlock_irqrestore(&mdp_spin_lock, flag);

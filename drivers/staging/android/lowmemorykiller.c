@@ -29,6 +29,7 @@
  *
  */
 
+#define REALLY_WANT_TRACEPOINTS
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
@@ -37,7 +38,8 @@
 #include <linux/notifier.h>
 #include <linux/memory.h>
 #include <linux/memory_hotplug.h>
-#include <linux/swap.h>
+
+#include <trace/events/memkill.h>
 
 static uint32_t lowmem_debug_level = 2;
 static int lowmem_adj[6] = {
@@ -54,15 +56,6 @@ static size_t lowmem_minfree[6] = {
 	16 * 1024,	/* 64MB */
 };
 static int lowmem_minfree_size = 4;
-static size_t lowmem_swapfree[6] = {
-	1 * 1024,	/* 4MB */
-	2 * 1024,	/* 8MB */
-	3 * 1024,	/* 12MB */
-	4 * 1024,	/* 16MB */
-	6 * 1024,	/* 24MB */
-	10 * 1024,	/* 40MB */
-};
-static int lowmem_swapfree_size = 6;
 
 static unsigned int offlining;
 static struct task_struct *lowmem_deathpending;
@@ -162,9 +155,8 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 	if (lowmem_minfree_size < array_size)
 		array_size = lowmem_minfree_size;
 	for (i = 0; i < array_size; i++) {
-		if ((other_free < lowmem_minfree[i] &&
-		    other_file < lowmem_minfree[i]) ||
-		    (total_swap_pages ? nr_swap_pages < lowmem_swapfree[i] : 0)) {
+		if (other_free < lowmem_minfree[i] &&
+		    other_file < lowmem_minfree[i]) {
 			min_adj = lowmem_adj[i];
 			break;
 		}
@@ -202,6 +194,12 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 			task_unlock(p);
 			continue;
 		}
+		if (fatal_signal_pending(p)) {
+			lowmem_print(2, "skip slow dying process %d\n",
+					p->pid);
+			task_unlock(p);
+			continue;
+		}
 		tasksize = get_mm_rss(mm);
 		task_unlock(p);
 		if (tasksize <= 0)
@@ -225,6 +223,8 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 			     selected_oom_adj, selected_tasksize);
 		lowmem_deathpending = selected;
 		lowmem_deathpending_timeout = jiffies + HZ;
+		trace_lmk_kill(selected->pid, selected->comm, selected_oom_adj,
+				selected_tasksize, min_adj);
 		force_sig(SIGKILL, selected);
 		rem -= selected_tasksize;
 	}
@@ -259,8 +259,6 @@ module_param_named(cost, lowmem_shrinker.seeks, int, S_IRUGO | S_IWUSR);
 module_param_array_named(adj, lowmem_adj, int, &lowmem_adj_size,
 			 S_IRUGO | S_IWUSR);
 module_param_array_named(minfree, lowmem_minfree, uint, &lowmem_minfree_size,
-			 S_IRUGO | S_IWUSR);
-module_param_array_named(swapfree, lowmem_swapfree, uint, &lowmem_swapfree_size,
 			 S_IRUGO | S_IWUSR);
 module_param_named(debug_level, lowmem_debug_level, uint, S_IRUGO | S_IWUSR);
 

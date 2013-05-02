@@ -1183,7 +1183,7 @@ static int mdp_do_histogram(struct fb_info *info,
 		goto error;
 	} else if (!ret) {
 		pr_err("%s(): Waiting Timeout for mdp_hist_comp\n", __func__);
-		mdp_hang_panic();
+		mdp4_hang_panic();
 		mutex_lock(&mgmt->mdp_hist_mutex);
 		mgmt->hist = NULL;
 		mutex_unlock(&mgmt->mdp_hist_mutex);
@@ -1305,7 +1305,7 @@ void mdp_pipe_kickoff(uint32 term, struct msm_fb_data_type *mfd)
 		if (!wait_for_completion_killable_timeout(&mdp_ppp_comp, HZ)) {
 			printk(KERN_ERR "%s: Wait timeout for mdp_ppp_comp\n",
 						__func__);
-			mdp_hang_panic();
+			mdp4_hang_panic();
 			mdp_ppp_waiting = FALSE;
 		}
 		mdp_disable_irq(term);
@@ -1872,7 +1872,7 @@ static int mdp_off(struct platform_device *pdev)
 	mdp_pipe_ctrl(MDP_CMD_BLOCK, MDP_BLOCK_POWER_OFF, FALSE);
 
 	if (mdp_rev >= MDP_REV_41 && mfd->panel.type == MIPI_CMD_PANEL)
-		mdp_dsi_cmd_overlay_suspend();
+		mdp_dsi_cmd_overlay_suspend(mfd);
 	return ret;
 }
 

@@ -248,6 +248,8 @@ extern struct platform_device msm_tsens_device;
 extern struct msm_otg_platform_data msm_otg_pdata;
 
 extern bool camera_single_mclk;
+extern void update_camera_gpio_cfg(struct msm_camera_sensor_info sensor_info,
+		uint8_t drv_strength);
 
 extern void msm8960_init_hdmi(struct platform_device *hdmi_dev,
 						struct msm_hdmi_platform_data *hdmi_data);
@@ -279,9 +281,10 @@ extern void __init pm8921_gpio_mpp_init(struct pm8xxx_gpio_init *pm8921_gpios,
 extern void __init msm8960_init_slim(void);
 extern void __init msm8960_pm_init(unsigned wakeup_irq);
 extern void __init pm8921_init(struct pm8xxx_keypad_platform_data *keypad,
-								int mode, int cool_temp,
-			       int warm_temp, void *cb, int lock,
-			       int hot_temp, int hot_temp_offset);
+			       int mode, int cool_temp, int warm_temp, void *cb,
+			       int lock, int hot_temp, int hot_temp_offset,
+			       int hot_temp_pcb,
+			       signed char hot_temp_pcb_offset);
 
 extern int  msm8960_change_memory_power(u64 start, u64 size, int change_type);
 extern void __init msm8960_map_io(void);

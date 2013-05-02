@@ -154,6 +154,7 @@ config ARCH_MSM8960
 	select ARCH_POPULATES_NODE_MAP
 	select ARCH_SPARSEMEM_ENABLE
 	select ARCH_HAS_HOLES_MEMORYMODEL
+	select ENABLE_DMM
 	select MEMORY_HOTPLUG if ENABLE_DMM
 	select MEMORY_HOTREMOVE if ENABLE_DMM
 	select ARCH_ENABLE_MEMORY_HOTPLUG if ENABLE_DMM
@@ -168,7 +169,7 @@ config ARCH_MSM8960
 	select MULTI_IRQ_HANDLER
 	select MSM_PM8X60 if PM
 	select HOLES_IN_ZONE if SPARSEMEM
-	select KRAIT_ERRATA32
+	select MSM_KRAIT_WFE_FIXUP
 
 config ARCH_MSM8930
 	bool "MSM8930"
@@ -206,6 +207,7 @@ config ARCH_MSM8930
 	select MULTI_IRQ_HANDLER
 	select MSM_PM8X60 if PM
 	select HOLES_IN_ZONE if SPARSEMEM
+	select MSM_KRAIT_WFE_FIXUP
 
 config ARCH_APQ8064
 	bool "APQ8064"
@@ -223,6 +225,7 @@ config ARCH_APQ8064
 	select MULTI_IRQ_HANDLER
 	select MSM_PM8X60 if PM
 	select HOLES_IN_ZONE if SPARSEMEM
+	select MSM_KRAIT_WFE_FIXUP
 
 config ARCH_MSMCOPPER
 	bool "MSM Copper"
@@ -307,6 +310,9 @@ config  ARCH_MSM_SCORPIONMP
 config  ARCH_MSM_KRAITMP
 	select ARCH_MSM_KRAIT
 	select MSM_SMP
+	bool
+
+config  MSM_KRAIT_WFE_FIXUP
 	bool
 
 config  ARCH_MSM_CORTEX_A5
@@ -1790,6 +1796,17 @@ config MSM_IOMMU
 
 	  If unsure, say N here.
 
+config MSM_IOMMU_PANIC_ON_FAULT
+	bool "MSM IOMMU Panic on pagefault"
+	depends on MSM_IOMMU=y
+	default n
+	help
+	  Debugging option to forcefully panic the kernel when any unhandled
+	  IOMMU fault occurs.  Should be used for debugging purposes only as
+	  it will not allow for any possible recovery.
+
+	  If unsure, say N here.
+
 config IOMMU_PGTABLES_L2
 	bool "Allow SMMU page tables in the L2 cache (Experimental)"
 	depends on MSM_IOMMU=y
@@ -2153,9 +2170,4 @@ config MSM_DCVS
 	  algorithm and the algorithm returns a frequency for the core which is
 	  passed to the frequency change driver.
 
-config KRAIT_ERRATA32
-	bool "Use workaround for MSM8960 Errata 32"
-	default n
-	help
-	  Disable WFI/WFE until used for MSM8960 Errata 32.
 endif

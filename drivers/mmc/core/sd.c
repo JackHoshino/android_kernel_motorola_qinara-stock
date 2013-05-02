@@ -919,6 +919,9 @@ static int mmc_sd_init_card(struct mmc_host *host, u32 ocr,
 	BUG_ON(!host);
 	WARN_ON(!host->claimed);
 
+	/* The initialization should be done at 3.3 V I/O voltage. */
+	mmc_set_signal_voltage(host, MMC_SIGNAL_VOLTAGE_330, 0);
+
 	err = mmc_sd_get_cid(host, ocr, cid, &rocr);
 	if (err)
 		return err;
@@ -1091,6 +1094,7 @@ static void mmc_sd_detect(struct mmc_host *host)
 
 		mmc_claim_host(host);
 		mmc_detach_bus(host);
+		mmc_power_off(host);
 		mmc_release_host(host);
 	}
 }
@@ -1208,11 +1212,6 @@ int mmc_attach_sd(struct mmc_host *host)
 
 	BUG_ON(!host);
 	WARN_ON(!host->claimed);
-
-	/* Make sure we are at 3.3V signalling voltage */
-	err = mmc_set_signal_voltage(host, MMC_SIGNAL_VOLTAGE_330, false);
-	if (err)
-		return err;
 
 	/* Disable preset value enable if already set since last time */
 	if (host->ops->enable_preset_value) {
